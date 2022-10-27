@@ -1,0 +1,485 @@
+---
+title: "Vliv virtuality na výkonnost týmu"
+author: "Michal Lauer"
+date: "`r format(Sys.time(), format = '%d. %m. %Y')`"
+output:
+  html_document:
+    theme: paper
+    css: "assets/css/style.css"
+    df_print: kable
+    highlight: zenburn
+    code_folding: hide
+editor_options:
+  chunk_output_type: console
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile,
+                    encoding = encoding,
+                    output_dir = "output/")})
+---
+```{r include=F}
+# Environment preparation
+cat('\f')
+rm(list = ls())
+# Clear output
+if (dir.exists("output")) unlink("output", recursive = T)
+# RMarkdown requirements for renv
+require("rmarkdown")
+require("yaml")
+# knitr setting
+knitr::opts_chunk$set(fig.align = "center",
+                      fig.path = "output/imgs/",
+                      fig.width = 12,
+                      fig.height = 7,
+                      dev = c("svg", "png"))
+# gtsummary theme
+gtsummary::set_gtsummary_theme(list(
+  "style_number-arg:big.mark" = " "
+))
+```
+
+# Preface
+This analysis is done on generated data and does not represent a real company.
+The main purpose of this work was to get my certification, which I've
+[accomplished](https://www.datacamp.com/certificate/DA0016698068691). Now I use
+this work to showcase my work and how I *do* data analysis. The project
+is located on my [Github page](https://github.com/MichalLauer/TravelAssured)
+```{r include=F}
+#TODO: Přidat prezentaci
+#TODO: Upravit prezentaci
+```
+
+# Introduction
+Travel Assured is a travel insurance company. Due to the COVID pandemic,
+they have had to cut their marketing budget by over 50%. It is more important
+than ever that they advertise in the right places and to the right people.
+
+Travel Assured wants answers to two key questions:
+
+1) Are there differences in the travel habits between customers and non-customers?
+2) What is the typical profile of customers and non-customers?
+
+This analysis notebook's purpose is to introduce the analysis to a *data* person.
+It shows how the data was manipulated, what was changed, and how things were
+computed. For a more business-detail approach, see the attached presentation.
+
+```{r include=F}
+# TODO: Prezentace
+```
+
+# Libraries
+This one block loads all libraries.
+```{r libs, message=F, warning=F}
+# Data wrangling
+library(dplyr)
+library(tidyr)
+library(glue)
+
+# Graphs
+library(ggplot2)
+library(patchwork)
+
+# Tables
+library(gtsummary)
+```
+
+# Data load
+The raw data set is loaded and transformed into a tibble.
+```{r data_raw}
+data_raw <-
+  read.csv(file = "input/travel_insurance.csv") |> 
+  as_tibble()
+
+head(data_raw)
+```
+
+The column names are transformed to *snake_case* stanard using the snakecase
+package. Variables are then transformed, such that:
+
+- *employment type* is now a factor
+- *graduate or not* is a logical variable (true - graduated, false - did not
+graduate)
+- *chronic disease* is now a logical variable (true - has disease, false - does
+not have a disease)
+- *frequent flyer* is now a logical variable (true - is a frq. flr., false - is
+not a frq. flr.)
+- *ever travelled abroad* is now a logical variable (true - has travelled, false
+- has not travelled)
+- *travel insurance* is now a logical variable (true - is insured, false - is
+not insured)
+```{r data}
+data <-
+  data_raw |> 
+  rename_with(snakecase::to_snake_case) |> 
+  mutate(employment_type       = factor(employment_type),
+         family_members        = family_members,
+         graduate_or_not       = graduate_or_not == "Yes",
+         chronic_diseases      = chronic_diseases == 1,
+         frequent_flyer        = frequent_flyer == "Yes",
+         ever_travelled_abroad = ever_travelled_abroad == "Yes",
+         travel_insurance      = travel_insurance == 1)
+```
+
+The data is now translated and the overall look is shown below.
+```{r }
+skimr::skim_without_charts(data)
+```
+
+Form the overview, it can be seen that there are no missing values - which is 
+really nice! Employment has only two levels - *Government Sector*, and 
+*Private Sector/Self Employed*. Each customer can have up to 9 other family
+members (excluding 1 as the factor starts at two family members). Except for
+customers who have bought an insurance, all logical values are heavily
+imbalanced. This could be useful in hypothesis testing and data exploration.
+Finally, 
+
+## Support variables {#vars}
+For further data analysis, some help variables are created to reduce bugs.
+```{r class.source = 'fold-show'}
+# Columns assigned as Travel habits
+travel_habits    <- c("frequent_flyer", "ever_travelled_abroad")
+# Columns assigned as Customer profiles
+customer_profile <- c("age", "employment_type", "graduate_or_not",
+                      "annual_income", "family_members", "chronic_diseases",
+                      "travel_insurance")
+# Labels transformation
+labels           <- c("TRUE" = "Yes", "FALSE" = "No")
+```
+
+# Difference in travel habits
+
+The first business question that is asked is:
+
+> Are there differences in the travel habits between customers and non-customers?
+
+Two columns which identify travel habits are *frequent_flyer* and
+*ever_travelled_abroad*.
+
+## Frequent flyers
+
+To identify if the difference among insured and uninsured people who are
+frequent flyers and who are **not** frequent flyers, the p-value is calculated.
+First the proportions are prepared in a special table.
+```{r }
+fq_prop <- 
+  data |> 
+  select(frequent_flyer, travel_insurance) |> 
+  group_by(travel_insurance, frequent_flyer) |> 
+  summarise(n = n(), .groups = "drop_last") |> 
+  mutate(total = sum(n),
+         mean = n/total)
+
+fq_prop
+```
+
+Compute *p*-value where travel insurance is false.
+```{r }
+x <- fq_prop$n[1:2]
+n <- fq_prop$total[1:2]
+
+fq_prop_uninsured <- prop.test(x = x, n = n, correct = F)
+fq_prop_uninsured
+```
+
+Compute *p*-value where travel insurance is true.
+```{r }
+x <- fq_prop$n[3:4]
+n <- fq_prop$total[3:4]
+
+fq_prop_insured <- prop.test(x = x, n = n, correct = F)
+fq_prop_insured
+```
+
+The differences among insured and uninsured people is graphically displayed.
+```{r frequent-flyers-bars}
+# Prepare text for graph
+fq_significance <- glue("
+Significance of difference (alpha = 0.05)
+  Insured customers: p {format.pval(fq_prop_insured$p.value)}
+  Uninsured customer: p {format.pval(fq_prop_uninsured$p.value)}
+")
+
+fq_p1 <-
+  data |> 
+  select(frequent_flyer, travel_insurance) |> 
+  ggplot(aes(x = travel_insurance, fill = frequent_flyer)) +
+  geom_bar(position = "dodge") +
+  annotate(geom = "label", x = 1.8, y = 1100,
+           label = fq_significance, hjust = 0) +
+  theme_bw() +
+  scale_x_discrete(labels = labels) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1300),
+                     labels = scales::label_number()) +
+  scale_fill_discrete(labels = labels) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    plot.caption = element_text(face = "italic", size = 9),
+    legend.position = "bottom",
+    plot.title = element_text(size = 16)
+  ) +
+  labs(
+    title = "The difference among customers is statistically significant",
+    x = "Insured",
+    y = "Total count",
+    caption = "Source: Michal Lauer, laumi.me"
+  )
+
+fq_p1
+```
+
+The second bar plot show the proportion among insured and uninsured people.
+```{r frequent-flyers-proportions}
+fq_p2 <- 
+  data |> 
+  select(frequent_flyer, travel_insurance) |> 
+  ggplot(aes(x = travel_insurance, fill = frequent_flyer)) +
+  geom_bar(position = "fill") +
+  theme_bw() +
+  scale_x_discrete(labels = labels) +
+  scale_y_continuous(expand = c(0, 0),
+                     labels = scales::label_percent()) +
+  scale_fill_discrete(labels = labels) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    plot.caption = element_text(face = "italic", size = 9),
+    legend.position = "bottom",
+    plot.title = element_text(size = 16)
+  ) +
+  labs(
+    title = "Iregular flyers heavilly outweight regular flyers",
+    x = "Insured",
+    y = "Relative count",
+    caption = "Source: Michal Lauer, laumi.me"
+  )
+
+fq_p2
+```
+
+Joined graphs using patchwork.
+```{r frequent-flyers-merged}
+# Edit graphs for patchwork
+fq_p1_pw <- 
+  fq_p1 +
+  labs(title = NULL,
+       caption = NULL)
+
+fq_p2_pw <- 
+  fq_p2 +
+  labs(title = NULL,
+       caption = NULL)
+
+# Update annotate position
+fq_p1_pw$layers[[2]]$data$x <- 1.35
+
+# Build graph with patchwork
+fq_patchwork <- 
+  (fq_p1_pw + fq_p2_pw) / guide_area() +
+  plot_layout(guides = "collect", heights = c(10, 1)) +
+  plot_annotation(
+    title = "Overview of frequent flyers among customers and non-customers",
+    caption = "Source: Michal Lauer, laumi.me"
+  ) & labs(
+    fill = "Frequent flyers"
+  ) &
+  theme(plot.caption = element_text(face = "italic", size = 9))
+
+fq_patchwork
+```
+
+## Ever travelled abroad
+The second identified travel habit is whether a person has ever travelled
+abroad. The process here is the same. First, the proportion table is created
+so *p*-values can be computed.
+```{r }
+eta_prop <- 
+  data |> 
+  select(ever_travelled_abroad, travel_insurance) |> 
+  group_by(travel_insurance, ever_travelled_abroad) |> 
+  summarise(n = n(), .groups = "drop_last") |> 
+  mutate(total = sum(n),
+         mean = n/total)
+
+eta_prop
+```
+
+Compute *p*-value where travel insurance is false.
+```{r }
+x <- eta_prop$n[1:2]
+n <- eta_prop$total[1:2]
+
+eta_prop_uninsured <- prop.test(x = x, n = n, correct = F)
+eta_prop_uninsured
+```
+
+Compute *p*-value where travel insurance is true.
+```{r label}
+x <- eta_prop$n[3:4]
+n <- eta_prop$total[3:4]
+
+eta_prop_insured <- prop.test(x = x, n = n, correct = F)
+eta_prop_insured
+```
+
+Now a bar graph is created representing the difference in each group.
+```{r ever-travelled-abroad-bars}
+# Prepare text for graph
+eta_significance <- glue("
+Significance of difference (alpha = 0.05)
+  Insured customers: p {format.pval(eta_prop_insured$p.value)}
+  Uninsured customer: p {format.pval(eta_prop_uninsured$p.value)}
+")
+
+eta_p1 <-
+  data |> 
+  select(ever_travelled_abroad, travel_insurance) |> 
+  ggplot(aes(x = travel_insurance, fill = ever_travelled_abroad)) +
+  geom_bar(position = "dodge") +
+  annotate(geom = "label", x = 1.8, y = 1100,
+           label = eta_significance, hjust = 0) +
+  theme_bw() +
+  scale_x_discrete(labels = labels) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1300),
+                     labels = scales::label_number()) +
+  scale_fill_discrete(labels = labels) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    plot.caption = element_text(face = "italic", size = 9),
+    legend.position = "bottom",
+    plot.title = element_text(size = 16)
+  ) +
+  labs(
+    title = "The difference among customers is statistically significant",
+    x = "Insured",
+    y = "Total count",
+    caption = "Source: Michal Lauer, laumi.me"
+  )
+
+eta_p1
+```
+
+The proportions are compares using filled bar graph.
+```{r ever-travelled-abroad-props}
+eta_p2 <- 
+  data |> 
+  select(ever_travelled_abroad, travel_insurance) |> 
+  ggplot(aes(x = travel_insurance, fill = ever_travelled_abroad)) +
+  geom_bar(position = "fill") +
+  theme_bw() +
+  scale_x_discrete(labels = labels) +
+  scale_y_continuous(expand = c(0, 0),
+                     labels = scales::label_percent()) +
+  scale_fill_discrete(labels = labels) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    plot.caption = element_text(face = "italic", size = 9),
+    legend.position = "bottom",
+    plot.title = element_text(size = 16)
+  ) +
+  labs(
+    title = "Iregular flyers heavilly outweight regular flyers",
+    x = "Insured",
+    y = "Relative count",
+    caption = "Source: Michal Lauer, laumi.me"
+  )
+
+eta_p2
+```
+
+Joined graphs using patchwork.
+```{r ever-travelled-abroad-merged}
+# Edit graphs for patchwork
+eta_p1_pw <- 
+  eta_p1 +
+  labs(title = NULL,
+       caption = NULL)
+
+eta_p2_pw <- 
+  eta_p2 +
+  labs(title = NULL,
+       caption = NULL)
+
+# Update annotate position
+eta_p1_pw$layers[[2]]$data$x <- 1.35
+
+# Build graph with patchwork
+eta_patchwork <- 
+  (eta_p1_pw + eta_p2_pw) / guide_area() +
+  plot_layout(guides = "collect", heights = c(10, 1)) +
+  plot_annotation(
+    title = "Overview of frequent flyers among customers and non-customers",
+    caption = "Source: Michal Lauer, laumi.me"
+  ) & labs(
+    fill = "Frequent flyers"
+  ) &
+  theme(plot.caption = element_text(face = "italic", size = 9))
+
+eta_patchwork
+```
+
+# Customer profile
+The second questions that the business asks is:
+
+> What is the typical profile of customers and non-customers?
+
+This questions is answered by summarizing columns related to customer profile 
+[see here](#vars)
+
+## Numerical
+Overview of numerical characteristics.
+```{r }
+data |> 
+  select(all_of(customer_profile)) |> 
+  select(travel_insurance, where(is.numeric)) |> 
+  mutate(travel_insurance = if_else(travel_insurance, "Insured", "Uninsured")) |> 
+  tbl_summary(by = travel_insurance,
+              label = list(
+                age ~ "Age",
+                annual_income ~ "Annual income",
+                family_members ~ "# of family members"
+              ),
+              statistic = everything() ~ "{mean} ± {sd} ({median})",
+              digits = everything() ~ 2,
+              type = family_members ~ "continuous") |> 
+  modify_caption("Characteristics of numerical variables") |> 
+  add_p()
+```
+
+```{r }
+#TODO: Summary
+```
+
+## Logical
+Overview of logical characteristics.
+```{r }
+data |> 
+  select(all_of(customer_profile)) |>
+  select(travel_insurance, where(is.logical)) |> 
+  mutate(travel_insurance = if_else(travel_insurance, "Insured", "Uninsured")) |> 
+  tbl_summary(by = travel_insurance,
+              label = list(
+                graduate_or_not ~ "Graduated",
+                chronic_diseases ~ "Has chronic disease"
+              )) |> 
+  modify_caption("Characteristics of logical variables") |> 
+  add_p(pvalue_fun = function(x) style_number(x, digits = 2))
+```
+
+```{r }
+#TODO: Summary
+```
+
+## Factor
+Overview of factor characteristics.
+```{r }
+data |> 
+  select(all_of(customer_profile)) |>
+  select(travel_insurance, where(is.factor)) |> 
+  mutate(travel_insurance = if_else(travel_insurance, "Insured", "Uninsured")) |> 
+  tbl_summary(by = travel_insurance,
+              label = employment_type ~ "Employment type") |> 
+  modify_caption("Characteristics of factor variables") |> 
+  add_p()
+```
+
+```{r }
+#TODO: Summary
+```
