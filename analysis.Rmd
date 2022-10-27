@@ -21,7 +21,8 @@ knit: (function(inputFile, encoding) {
 cat('\f')
 rm(list = ls())
 # Clear output
-if (dir.exists("output")) unlink("output", recursive = T)
+if (dir.exists("output") & !isTRUE(getOption('knitr.in.progress')))
+  unlink("output", recursive = T)
 # RMarkdown requirements for renv
 require("rmarkdown")
 require("yaml")
